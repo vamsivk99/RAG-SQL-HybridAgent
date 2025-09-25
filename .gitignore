@@ -1,0 +1,28 @@
+# Secrets
+.env
+.streamlit/secrets.toml
+
+# Virtual env / OS / Python caches
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.ipynb_checkpoints/
+
+# App temp/uploads and logs (adjust if you keep a local uploads dir)
+uploads/
+logs/
+
+# Vector/milvus/local index dirs (rename if you used different folders)
+milvus/
+milvus_data/
+storage/
+vector_store/
+index_store/
+
+# Databases: exclude all .sqlite by default, but allow the demo DB
+*.sqlite
+!fema_nfip_star.sqlite# Ignore large docs
+*.pdf
+*.PDF
+*.parquet
