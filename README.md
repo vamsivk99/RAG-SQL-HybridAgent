@@ -1,80 +1,124 @@
-# RAG with SQL Router
+# RAG + Text2SQL Hybrid Assistant
 
-We are developing a system that will guide you in creating a custom agent. This agent can query either your Vector DB index for RAG-based retrieval or a separate SQL query engine. 
+This app answers business questions over both structured data (SQL) and unstructured documents (RAG). It routes each query to the most suitable tool, shows the exact SQL used for transparency, and can optionally validate long‑form answers with Cleanlab Codex trust scoring.
 
-## 🔍 **The Critical Component: Response Validation**
+## Features
 
-**While everyone is trying to build agents, no one tells you how to ensure their outputs are reliable.**
+- Text2SQL over your database (SQLite/Postgres/MySQL/DuckDB)
+- RAG over PDFs/DOCX/PPTX/TXT (Docling parsing + Milvus/FAISS vector store)
+- Automatic tool routing (SQL vs Documents) with timeouts and fallbacks
+- “SQL Used” display for auditability and faster iteration
+- Optional Cleanlab Codex trust score for document answers
+- Database explorer tailored to the selected database
+- Vector store toggle: Milvus (Docker) or FAISS (local, in‑process)
+- File-hash caching for fast re-uploads (reuses embeddings)
 
-**[Cleanlab Codex](https://help.cleanlab.ai/codex/)**, developed by researchers from MIT, offers a platform to evaluate and monitor any RAG or agentic app you're building. This system integrates Cleanlab Codex for automatic response validation, ensuring your AI outputs are trustworthy and continuously improving.
+## Architecture
 
-### **Why Cleanlab Codex is Essential:**
+- UI: Streamlit (`app.py`)
+  - Sidebar for keys, DB selection, doc uploads, and vector-store toggle
+  - Progress indicators during parsing → embeddings → indexing
+  - Chat interface shows SQL / trust score
+  - Database explorer wired to the active DB
+- Orchestration: LlamaIndex workflow (`workflow.py`)
+  - Decides whether to call the SQL tool or Document tool
+  - Tool timeouts and error handling
+- Text2SQL (`tools.py` → `setup_sql_tool`)
+  - SQLAlchemy connection (SQLite path or SQLAlchemy URL)
+  - LlamaIndex NLSQL engine with:
+    - SQL dialect hinting (SQLite/Postgres/MySQL/DuckDB)
+    - Schema primer (reflected tables/columns)
+    - Few‑shot examples (joins, aggregations, summary table usage)
+    - Light entity normalization
+  - Returns both the result and the exact SQL used
+- Documents / RAG (`tools.py` → `setup_document_tool`)
+  - Docling parsing → chunking → embeddings (`BAAI/bge-small-en-v1.5`, 384‑dim)
+  - Vector store: Milvus (Docker) or FAISS (in‑process)
+  - Filename-aware retrieval, tuned top‑k, summarization to avoid truncation
+  - Optional Cleanlab Codex trust scoring
+  - File hashing to skip re‑embedding unchanged uploads
+- LLM: via OpenRouter (configurable model)
+- Config: `.env` or `.streamlit/secrets.toml` for keys and model names
 
-- **🔍 Automatic Detection**: Detects inaccurate/unhelpful responses from your AI automatically
-- **📈 Continuous Improvement**: Allows Subject Matter Experts to directly improve responses without engineering intervention  
-- **🎯 Trust Scoring**: Provides reliability metrics for every response
-- **🔄 Real-time Validation**: Validates queries and responses in real-time
-- **📊 Analytics**: Track improvement rates and response quality over time
+## Demo dataset (FEMA NFIP)
 
-### **How It Works in This System:**
+- Source: FEMA NFIP redacted claims → converted to SQLite
+- Star schema in `fema_nfip_star.sqlite`:
+  - Fact: `nfip_fact_claim` (payout metrics; keys to dimensions)
+  - Dimensions: `dim_state`, `dim_event`, `dim_flood_zone`, `dim_time` (year/quarter)
+  - Summary: `quarterly_flood_zone_trend` (pre‑aggregated trends)
+- Performance:
+  - Indexes on joins/time columns, tuned SQLite pragmas
+  - Pre‑aggregated summary table prevents timeouts on complex trend questions
 
-1. **Query Processing**: Your queries are automatically validated by Cleanlab Codex
-2. **Response Validation**: AI responses are scored for reliability and accuracy
-3. **SME Intervention**: Subject Matter Experts can improve responses through the Codex interface
-4. **Continuous Learning**: The system learns from validated responses for future queries
+## Setup
 
-We use:
+### 1) Python deps
+```bash
+cd rag-sql-router
+uv sync        # or: pip install -r requirements.txt
+```
 
-- [Llama_Index](https://docs.llamaindex.ai/en/stable/) for orchestration
-- [Docling](https://docling-project.github.io/docling) for simplifying document processing
-- [Milvus](https://milvus.io/) to self-host a VectorDB
-- **[Cleanlab Codex](https://help.cleanlab.ai/codex/)** for **response validation and reliability assurance** ⭐
-- [OpenRouterAI](https://openrouter.ai/docs/quick-start) to access Alibaba's Qwen model
-
-> **💡 Key Insight**: While most tutorials focus on building agents, **[Cleanlab Codex](https://help.cleanlab.ai/codex/)** addresses the critical gap of ensuring those agents produce reliable, trustworthy outputs.
-
-## Set Up
-
-Follow these steps one by one:
-
-### Setup Milvus VectorDB
-
-Milvus provides an installation script to install it as a docker container.
-
-To install Milvus in Docker, you can use the following command:
-
+### 2) Milvus (optional; use FAISS if you prefer fully local)
 ```bash
 curl -sfL https://raw.githubusercontent.com/milvus-io/milvus/master/scripts/standalone_embed.sh -o standalone_embed.sh
-
 bash standalone_embed.sh start
 ```
 
-### Install Dependencies
+### 3) Environment variables
+Provide via `.env` or `.streamlit/secrets.toml`:
 
-```bash
-uv sync
-```
+- `OPENROUTER_API_KEY` (required for LLM)
+- `OPENROUTER_MODEL` (optional, e.g., `qwen/qwen-turbo`)
+- `CODEX_API_KEY` (optional, Cleanlab user key)
+- `CODEX_PROJECT_ACCESS_KEY` (optional, Cleanlab project key)
+- `SQLITE_DB_PATH` (optional, default SQLite path; e.g., `fema_nfip_star.sqlite`)
+- `ENGINE_URL` (optional, SQLAlchemy URL for Postgres/MySQL/DuckDB)
 
-## Run the Notebook
-
-You can run the `notebook.ipynb` file to test the functionality of the code in a Jupyter Notebook environment. This notebook will help you understand routing, tool calling, and validating responses.
-
-## Run the Application
-
-To run the Streamlit app, use the following command:
+## Run
 
 ```bash
 streamlit run app.py
 ```
 
-Open your browser and navigate to `http://localhost:8501` to access the app.
+In the sidebar:
+- Enter OpenRouter key; models initialize automatically
+- Toggle Milvus on (Docker) or off (FAISS)
+- Pick DB Type: SQLite path or SQLAlchemy URL
+- Upload documents (shows parse → embed → index progress)
 
-## 📬 Stay Updated with Our Newsletter!
+Ask questions in the chat. For SQL queries, the app shows the “SQL Used”. For RAG answers, a trust score is shown when Codex is configured.
 
-**Get a FREE Data Science eBook** 📖 with 150+ essential lessons in Data Science when you subscribe to our newsletter! Stay in the loop with the latest tutorials, insights, and exclusive resources. [Subscribe now!](https://join.dailydoseofds.com)
+## Text2SQL details
 
-[![Daily Dose of Data Science Newsletter](https://github.com/patchy631/ai-engineering/blob/main/resources/join_ddods.png)](https://join.dailydoseofds.com)
+- LLM‑driven (LlamaIndex NLSQL engine). No custom model training.
+- Prompt includes: dialect hint, schema primer, few‑shots, entity normalization.
+- Executes via SQLAlchemy and returns both the answer and the exact SQL.
 
-## Contribution
+## Troubleshooting
 
-Contributions are welcome! Feel free to fork this repository and submit pull requests with your improvements.
+- Milvus not reachable: ensure Docker Desktop is running; start with the script above. Or toggle off Milvus to use FAISS.
+- Long doc processing: large PDFs can take minutes (Docling OCR + embeddings). Prefer smaller chapters or pre‑converted TXT; re‑uploads reuse cached embeddings.
+- SQL timeouts: select the star‑schema DB; prefer the pre‑aggregated `quarterly_flood_zone_trend` table for trend queries.
+- Keys/Models: verify `OPENROUTER_API_KEY`; set `OPENROUTER_MODEL` if needed. Codex keys are optional; without them, trust score is hidden.
+
+## Local‑only mode
+
+- Swap OpenRouter for a local OpenAI‑compatible server (e.g., Ollama/LM Studio)
+- Disable Codex
+- Use SQLite/Postgres/MySQL locally
+- Use FAISS (in‑process) or Milvus (local Docker)
+
+## Quick commands
+
+```bash
+uv sync
+streamlit run app.py
+# Milvus
+bash standalone_embed.sh start
+bash standalone_embed.sh stop
+```
+
+## License
+
+This repository is provided as‑is under an open license. See the LICENSE file if present.
